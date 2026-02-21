@@ -28,16 +28,31 @@ export const getUserById = query({
 });
 
 /**
- * Returns all users except the caller — used for "start new conversation" search.
- * Filters by name/email prefix; empty query returns all other users.
+ * Returns all users except the caller, each enriched with their current
+ * presence status. An empty `query` string returns every other user
+ * (used to populate the "all users" list before the user starts typing).
+ *
+ * Matching rules (case-insensitive):
+ *   • name        — full name from Clerk
+ *   • displayName — username override
+ *   • email       — primary email address
+ *
+ * Each result includes:
+ *   status      — "online" | "idle" | "dnd" | "offline" (from presence table)
+ *   lastSeenAt  — Unix ms of last heartbeat
  */
 export const searchUsers = query({
   args: { query: v.string() },
   handler: async (ctx, { query: searchQuery }) => {
     const callerId = await getAuthUserId(ctx);
+
+    // Fetch all users in one pass then filter in memory.
+    // For very large user bases this should use a search index — the
+    // searchIndex on `name` defined in schema.ts is ready for that upgrade.
     const all = await ctx.db.query("users").collect();
     const q = searchQuery.toLowerCase().trim();
-    return all.filter(
+
+    const filtered = all.filter(
       (u: any) =>
         u._id !== callerId &&
         (q === "" ||
@@ -45,6 +60,38 @@ export const searchUsers = query({
           (u.displayName ?? "").toLowerCase().includes(q) ||
           u.email.toLowerCase().includes(q))
     );
+
+    // Join presence for every matching user in parallel
+    const enriched = await Promise.all(
+      filtered.map(async (u: any) => {
+        const presence = await ctx.db
+          .query("presence")
+          .withIndex("by_user", (q: any) => q.eq("userId", u._id))
+          .unique();
+
+        return {
+          _id: u._id,
+          clerkId: u.clerkId,
+          name: u.name,
+          displayName: u.displayName ?? null,
+          email: u.email,
+          imageUrl: u.imageUrl,
+          status: (presence?.status ?? "offline") as
+            | "online" | "idle" | "dnd" | "offline",
+          lastSeenAt: presence?.lastSeenAt ?? 0,
+        };
+      })
+    );
+
+    // Sort: online first, then by name
+    return enriched.sort((a, b) => {
+      const order = { online: 0, idle: 1, dnd: 2, offline: 3 };
+      const statusDiff =
+        (order[a.status as keyof typeof order] ?? 3) -
+        (order[b.status as keyof typeof order] ?? 3);
+      if (statusDiff !== 0) return statusDiff;
+      return (a.displayName ?? a.name).localeCompare(b.displayName ?? b.name);
+    });
   },
 });
 

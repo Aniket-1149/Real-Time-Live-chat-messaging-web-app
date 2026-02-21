@@ -1,14 +1,30 @@
 "use client";
 
 import { useQuery } from "convex/react";
+import { useEffect, useState } from "react";
 import { api } from "@/convex/_generated/api";
 
+/** Milliseconds to wait after the last keystroke before firing the query */
+const DEBOUNCE_MS = 300;
+
 /**
- * Search for users by name or email.
- * Debounce the query string on the calling side.
+ * Searches for users by name / displayName / email, excluding the caller.
  *
- * Returns `undefined` while loading, `[]` for no results.
+ * • An empty `query` returns ALL other users (useful for the initial list).
+ * • The query string is debounced by DEBOUNCE_MS so Convex only creates a
+ *   new reactive subscription after the user pauses typing — not on every
+ *   single keystroke.
+ * • Returns `undefined` while loading / between debounce ticks.
+ * • Returns `[]` when there are genuinely no results.
+ * • Each result includes `status` and `lastSeenAt` from the presence table.
  */
 export function useUserSearch(query: string) {
-  return useQuery(api.users.searchUsers, { query });
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  return useQuery(api.users.searchUsers, { query: debouncedQuery });
 }
