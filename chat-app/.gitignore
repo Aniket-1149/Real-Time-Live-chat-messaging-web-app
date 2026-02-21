@@ -1,0 +1,8 @@
+# .gitignore
+node_modules/
+.next/
+.env.local
+.env*.local
+dist/
+.turbo/
+*.log
