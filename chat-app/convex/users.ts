@@ -52,40 +52,78 @@ export const searchUsers = query({
 
 /**
  * Creates or updates the Convex user record from a Clerk webhook payload.
- * Called server-side from the /api/webhooks/clerk route handler.
- * Does NOT write presence — the client heartbeat hook handles that separately.
+ * Called server-side from /api/webhooks/clerk — no auth context required.
+ *
+ * Fields synced from Clerk:
+ *   clerkId      — stable Clerk user ID (never changes)
+ *   name         — first + last name, falls back to username or "User"
+ *   displayName  — Clerk username (shown instead of name in the UI when set)
+ *   email        — primary email address
+ *   imageUrl     — profile picture; falls back to DiceBear avatar
+ *   lastSeenAt   — seeded with Clerk account created_at on first sync,
+ *                  then maintained by the client heartbeat hook
+ *
+ * On CREATE: also bootstraps a presence row (status=offline, lastSeenAt now)
+ *            so queries never have to handle a missing presence row.
+ * On UPDATE: only patches fields that have actually changed to minimise
+ *            invalidating reactive subscriptions.
  */
 export const upsertUser = mutation({
   args: {
     clerkId: v.string(),
     name: v.string(),
+    displayName: v.optional(v.string()),
     email: v.string(),
     imageUrl: v.string(),
+    /** Unix ms — Clerk's user.created_at; used to seed presence.lastSeenAt */
+    createdAt: v.optional(v.number()),
   },
-  handler: async (ctx, { clerkId, name, email, imageUrl }) => {
+  handler: async (ctx, { clerkId, name, displayName, email, imageUrl, createdAt }) => {
     const existing = await ctx.db
       .query("users")
       .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", clerkId))
       .unique();
 
     if (existing) {
-      await ctx.db.patch(existing._id, { name, email, imageUrl });
+      // Diff: only write fields that changed to avoid unnecessary fan-outs
+      const patch: Record<string, any> = {};
+      if (existing.name !== name)               patch.name = name;
+      if ((existing.displayName ?? null) !== (displayName ?? null))
+                                                patch.displayName = displayName;
+      if (existing.email !== email)             patch.email = email;
+      if (existing.imageUrl !== imageUrl)       patch.imageUrl = imageUrl;
+
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(existing._id, patch);
+      }
+
       return existing._id;
     }
 
+    // ── First-time sync ───────────────────────────────────────────────────
     const userId = await ctx.db.insert("users", {
       clerkId,
       name,
+      ...(displayName ? { displayName } : {}),
       email,
       imageUrl,
     });
 
-    // Bootstrap a presence row so queries never have to handle "missing presence"
-    await ctx.db.insert("presence", {
-      userId,
-      status: "offline",
-      lastSeenAt: Date.now(),
-    });
+    // Bootstrap presence — idempotent guard in case of duplicate webhooks
+    const existingPresence = await ctx.db
+      .query("presence")
+      .withIndex("by_user", (q: any) => q.eq("userId", userId))
+      .unique();
+
+    if (!existingPresence) {
+      await ctx.db.insert("presence", {
+        userId,
+        status: "offline",
+        // Seed with Clerk account creation time so "last seen" is meaningful
+        // from day one, even before the user opens the app.
+        lastSeenAt: createdAt ?? Date.now(),
+      });
+    }
 
     return userId;
   },
