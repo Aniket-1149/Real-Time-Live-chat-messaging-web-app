@@ -90,7 +90,21 @@ export const listConversations = query({
 /**
  * Finds an existing DM conversation between the caller and `otherUserId`,
  * or creates one. Returns the conversation ID.
- * Deduplication is guaranteed by the sorted participantIds pair.
+ *
+ * Deduplication strategy (two-phase, belt-and-suspenders):
+ *
+ *  Phase 1 — Index lookup
+ *    participantIds is stored sorted, so we query the `by_participants`
+ *    index with the same sorted pair for an O(1) hit.
+ *
+ *  Phase 2 — Full scan fallback
+ *    In case the index hasn't caught up (e.g. warm-up, migration) we
+ *    scan all DMs where both users appear and pick the first match.
+ *    This path is O(n) but only runs when phase 1 returns nothing.
+ *
+ * Because both phases run inside the same mutation transaction, only
+ * one writer can reach the `insert` path at a time — Convex serialises
+ * concurrent writes to the same table, preventing race-condition dupes.
  */
 export const getOrCreateConversation = mutation({
   args: { otherUserId: v.id("users") },
@@ -98,15 +112,38 @@ export const getOrCreateConversation = mutation({
     const userId = await requireAuthUserId(ctx);
     if (userId === otherUserId) throw new Error("Cannot start a conversation with yourself");
 
+    // Canonical sorted pair — guarantees the same order regardless of
+    // who initiates the conversation.
     const participantIds = [userId, otherUserId].sort() as Id<"users">[];
 
-    const existing = await ctx.db
+    // ── Phase 1: index lookup ─────────────────────────────────────────────
+    const byIndex = await ctx.db
       .query("conversations")
       .withIndex("by_participants", (q: any) => q.eq("participantIds", participantIds))
       .unique();
 
+    if (byIndex) return byIndex._id;
+
+    // ── Phase 2: full-scan fallback ───────────────────────────────────────
+    // Collect every DM, then check whether participantIds contains both
+    // users.  We only reach this branch if the index returned nothing.
+    const allDms = await ctx.db
+      .query("conversations")
+      .filter((q: any) => q.eq(q.field("type"), "dm"))
+      .collect();
+
+    const existing = allDms.find((c: any) => {
+      const ids: string[] = c.participantIds ?? [];
+      return (
+        ids.length === 2 &&
+        ids.includes(userId as string) &&
+        ids.includes(otherUserId as string)
+      );
+    });
+
     if (existing) return existing._id;
 
+    // ── Create ────────────────────────────────────────────────────────────
     const conversationId = await ctx.db.insert("conversations", {
       type: "dm",
       participantIds,

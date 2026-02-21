@@ -67,8 +67,33 @@ export default function ChatPage() {
   );
 
   const handleStartConversation = useCallback(
-    async (otherUserId: Id<"users">) => {
+    async (otherUserId: Id<"users">, existingConvId: Id<"conversations"> | null) => {
       try {
+        // Fast path: find an already-loaded DM with this user without
+        // hitting the network — avoids a mutation round-trip and prevents
+        // any race-condition duplicates on the client side.
+        if (existingConvId) {
+          setActiveConvId(existingConvId);
+          setShowNewConvDialog(false);
+          return;
+        }
+
+        // Also check the live list in case the dialog's map is stale
+        // (e.g. conversations loaded after the dialog was opened).
+        const existing = (conversations ?? []).find(
+          (c: any) =>
+            c.type === "dm" &&
+            c.otherUser?._id === otherUserId
+        );
+
+        if (existing) {
+          setActiveConvId(existing._id as Id<"conversations">);
+          setShowNewConvDialog(false);
+          return;
+        }
+
+        // Slow path: conversation doesn't exist yet — let the backend
+        // create it with deterministic sorted-participantIds deduplication.
         const convId = await getOrCreateConversation({ otherUserId });
         setActiveConvId(convId);
         setShowNewConvDialog(false);
@@ -76,7 +101,7 @@ export default function ChatPage() {
         console.error("Failed to create conversation:", err);
       }
     },
-    [getOrCreateConversation]
+    [conversations, getOrCreateConversation]
   );
 
   // ── Loading states ─────────────────────────────────────────────────────────
@@ -157,6 +182,7 @@ export default function ChatPage() {
         <NewConversationDialog
           onClose={() => setShowNewConvDialog(false)}
           onStartConversation={handleStartConversation}
+          conversations={conversations as any[]}
         />
       )}
     </div>

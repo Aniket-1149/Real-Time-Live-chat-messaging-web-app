@@ -3,19 +3,29 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { X, Search, Loader2, MessageCircle, CheckCircle2 } from "lucide-react";
 import { useUserSearch } from "@/hooks/useUserSearch";
-import { useConversations } from "@/hooks/useConversations";
 import StatusDot from "./StatusDot";
 import { Id } from "@/convex/_generated/dataModel";
 import { Status } from "@/types/chat";
 
 interface NewConversationDialogProps {
   onClose: () => void;
-  onStartConversation: (userId: Id<"users">) => void;
+  /**
+   * Called when the user selects someone.
+   * `existingConvId` is set when a DM already exists — the caller can
+   * navigate instantly without a mutation round-trip.
+   */
+  onStartConversation: (
+    userId: Id<"users">,
+    existingConvId: Id<"conversations"> | null
+  ) => void;
+  /** Raw conversations list from useConversations() to detect existing DMs. */
+  conversations: any[] | undefined;
 }
 
 export default function NewConversationDialog({
   onClose,
   onStartConversation,
+  conversations,
 }: NewConversationDialogProps) {
   const [query, setQuery] = useState("");
   const [focusedIndex, setFocusedIndex] = useState(0);
@@ -26,17 +36,16 @@ export default function NewConversationDialog({
   // Debounced realtime search — empty string returns ALL other users
   const users = useUserSearch(query);
 
-  // Existing conversations to detect "already chatting" state
-  const conversations = useConversations();
-
-  // Build a Set of user IDs the current user already has a DM with
-  const existingDmUserIds = useMemo<Set<string>>(() => {
-    if (!conversations) return new Set();
-    return new Set(
-      conversations
-        .filter((c: any) => c.type === "dm" && c.otherUser)
-        .map((c: any) => c.otherUser._id as string)
-    );
+  // Build a Map of userId → existing DM conversationId
+  const existingDmMap = useMemo<Map<string, Id<"conversations">>>(() => {
+    const map = new Map<string, Id<"conversations">>();
+    if (!conversations) return map;
+    for (const c of conversations) {
+      if (c.type === "dm" && c.otherUser) {
+        map.set(c.otherUser._id as string, c._id as Id<"conversations">);
+      }
+    }
+    return map;
   }, [conversations]);
 
   // Reset focused item whenever results change
@@ -61,7 +70,10 @@ export default function NewConversationDialog({
       } else if (e.key === "Enter") {
         e.preventDefault();
         const focused = users[focusedIndex];
-        if (focused) onStartConversation(focused._id as Id<"users">);
+        if (focused) {
+          const existingConvId = existingDmMap.get(focused._id as string) ?? null;
+          onStartConversation(focused._id as Id<"users">, existingConvId);
+        }
       } else if (e.key === "Escape") {
         onClose();
       }
@@ -78,8 +90,11 @@ export default function NewConversationDialog({
   }, [focusedIndex]);
 
   const handleSelect = useCallback(
-    (userId: Id<"users">) => onStartConversation(userId),
-    [onStartConversation]
+    (userId: Id<"users">) => {
+      const existingConvId = existingDmMap.get(userId as string) ?? null;
+      onStartConversation(userId, existingConvId);
+    },
+    [existingDmMap, onStartConversation]
   );
 
   // Decide what to show in the list area
@@ -176,7 +191,7 @@ export default function NewConversationDialog({
 
           {/* User rows */}
           {users?.map((user: any, index: number) => {
-            const alreadyChats = existingDmUserIds.has(user._id as string);
+            const alreadyChats = existingDmMap.has(user._id as string);
             const isFocused = index === focusedIndex;
 
             return (
