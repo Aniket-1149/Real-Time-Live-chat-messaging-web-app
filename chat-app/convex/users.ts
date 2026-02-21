@@ -6,7 +6,7 @@ import { getAuthUserId } from "./helpers";
 
 /**
  * Returns the Convex user record for the currently authenticated Clerk user.
- * Returns null if the user is not yet synced.
+ * Returns null if the user has not been synced yet (webhook pending).
  */
 export const getCurrentUser = query({
   args: {},
@@ -18,7 +18,7 @@ export const getCurrentUser = query({
 });
 
 /**
- * Returns a user by their Convex ID.
+ * Returns a user profile by their Convex ID.
  */
 export const getUserById = query({
   args: { userId: v.id("users") },
@@ -29,6 +29,7 @@ export const getUserById = query({
 
 /**
  * Returns all users except the caller — used for "start new conversation" search.
+ * Filters by name/email prefix; empty query returns all other users.
  */
 export const searchUsers = query({
   args: { query: v.string() },
@@ -39,7 +40,10 @@ export const searchUsers = query({
     return all.filter(
       (u: any) =>
         u._id !== callerId &&
-        (q === "" || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+        (q === "" ||
+          u.name.toLowerCase().includes(q) ||
+          (u.displayName ?? "").toLowerCase().includes(q) ||
+          u.email.toLowerCase().includes(q))
     );
   },
 });
@@ -47,8 +51,9 @@ export const searchUsers = query({
 // ─── Upsert user (called from Clerk webhook) ──────────────────────────────
 
 /**
- * Creates or updates the Convex user record from Clerk webhook payload.
- * Called server-side from the Clerk webhook route handler.
+ * Creates or updates the Convex user record from a Clerk webhook payload.
+ * Called server-side from the /api/webhooks/clerk route handler.
+ * Does NOT write presence — the client heartbeat hook handles that separately.
  */
 export const upsertUser = mutation({
   args: {
@@ -68,19 +73,26 @@ export const upsertUser = mutation({
       return existing._id;
     }
 
-    return await ctx.db.insert("users", {
+    const userId = await ctx.db.insert("users", {
       clerkId,
       name,
       email,
       imageUrl,
+    });
+
+    // Bootstrap a presence row so queries never have to handle "missing presence"
+    await ctx.db.insert("presence", {
+      userId,
       status: "offline",
       lastSeenAt: Date.now(),
     });
+
+    return userId;
   },
 });
 
 /**
- * Marks the user as offline when deleted from Clerk.
+ * Marks the user as offline (and keeps the profile row) when deleted from Clerk.
  */
 export const deleteUser = mutation({
   args: { clerkId: v.string() },
@@ -89,23 +101,37 @@ export const deleteUser = mutation({
       .query("users")
       .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", clerkId))
       .unique();
-    if (user) {
-      await ctx.db.patch(user._id, { status: "offline" });
+
+    if (!user) return;
+
+    // Set presence to offline
+    const presence = await ctx.db
+      .query("presence")
+      .withIndex("by_user", (q: any) => q.eq("userId", user._id))
+      .unique();
+
+    if (presence) {
+      await ctx.db.patch(presence._id, { status: "offline", lastSeenAt: Date.now() });
     }
   },
 });
 
-// ─── Presence ──────────────────────────────────────────────────────────────
-
 /**
- * Updates the caller's status and records a heartbeat timestamp.
- * status: "online" | "idle" | "dnd" | "offline"
+ * Updates the current user's display name and/or avatar.
  */
-export const updatePresence = mutation({
-  args: { status: v.string() },
-  handler: async (ctx, { status }) => {
+export const updateProfile = mutation({
+  args: {
+    displayName: v.optional(v.string()),
+    imageUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, { displayName, imageUrl }) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return;
-    await ctx.db.patch(userId, { status, lastSeenAt: Date.now() });
+    if (!userId) throw new Error("Unauthenticated");
+
+    const patch: Record<string, any> = {};
+    if (displayName !== undefined) patch.displayName = displayName;
+    if (imageUrl !== undefined) patch.imageUrl = imageUrl;
+
+    await ctx.db.patch(userId, patch);
   },
 });

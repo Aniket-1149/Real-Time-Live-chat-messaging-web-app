@@ -1,13 +1,16 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireAuthUserId } from "./helpers";
-import { Id } from "./_generated/dataModel";
 
 // ─── List messages in a conversation ──────────────────────────────────────
 
 /**
- * Returns all (non-deleted) messages for a conversation, oldest first.
- * Each message is enriched with the sender's name and imageUrl for rendering.
+ * Returns all non-deleted messages for a conversation, oldest-first.
+ * Soft-deleted messages are replaced with a tombstone so UI can render
+ * "This message was deleted" in the correct position in the thread.
+ *
+ * Each message is enriched with:
+ *   senderName, senderImageUrl — for rendering the avatar/name
  */
 export const listMessages = query({
   args: { conversationId: v.id("conversations") },
@@ -22,18 +25,44 @@ export const listMessages = query({
       .order("asc")
       .collect();
 
-    // Enrich with sender info
     const enriched = await Promise.all(
-      messages
-        .filter((m: any) => !m.deleted)
-        .map(async (msg: any) => {
-          const sender = await ctx.db.get(msg.senderId);
+      messages.map(async (msg: any) => {
+        // Always fetch sender so deleted-tombstones still show sender info
+        const sender = await ctx.db.get(msg.senderId);
+
+        if (msg.deleted) {
+          // Return a tombstone — content scrubbed, metadata preserved
           return {
-            ...msg,
+            _id: msg._id,
+            _creationTime: msg._creationTime,
+            conversationId: msg.conversationId,
+            senderId: msg.senderId,
             senderName: sender?.name ?? "Unknown",
             senderImageUrl: sender?.imageUrl ?? "",
+            text: null,
+            deleted: true,
+            deletedAt: msg.deletedAt ?? null,
+            edited: false,
+            editedAt: null,
+            replyToId: msg.replyToId ?? null,
           };
-        })
+        }
+
+        return {
+          _id: msg._id,
+          _creationTime: msg._creationTime,
+          conversationId: msg.conversationId,
+          senderId: msg.senderId,
+          senderName: sender?.name ?? "Unknown",
+          senderImageUrl: sender?.imageUrl ?? "",
+          text: msg.text,
+          deleted: false,
+          deletedAt: null,
+          edited: msg.edited ?? false,
+          editedAt: msg.editedAt ?? null,
+          replyToId: msg.replyToId ?? null,
+        };
+      })
     );
 
     return enriched;
@@ -43,27 +72,39 @@ export const listMessages = query({
 // ─── Send a message ────────────────────────────────────────────────────────
 
 /**
- * Inserts a new message and updates the conversation's lastMessage fields
- * and the unread count for the other participant.
+ * Inserts a new message then updates:
+ *   • the conversation snapshot (lastMessageId, lastMessageText, lastMessageTime,
+ *     lastMessageSenderId)
+ *   • the unread counter for every member who is NOT the sender
  */
 export const sendMessage = mutation({
   args: {
     conversationId: v.id("conversations"),
     text: v.string(),
+    replyToId: v.optional(v.id("messages")),
   },
-  handler: async (ctx, { conversationId, text }) => {
+  handler: async (ctx, { conversationId, text, replyToId }) => {
     const userId = await requireAuthUserId(ctx);
 
     const trimmed = text.trim();
     if (!trimmed) throw new Error("Message text cannot be empty");
 
-    // Insert the message
+    // Verify sender is a member of the conversation
+    const membership = await ctx.db
+      .query("conversationMembers")
+      .withIndex("by_user_conversation", (q: any) =>
+        q.eq("userId", userId).eq("conversationId", conversationId)
+      )
+      .unique();
+    if (!membership) throw new Error("Not a member of this conversation");
+
     const messageId = await ctx.db.insert("messages", {
       conversationId,
       senderId: userId,
       text: trimmed,
-      reactions: [],
+      ...(replyToId ? { replyToId } : {}),
       deleted: false,
+      edited: false,
     });
 
     // Update the conversation snapshot
@@ -71,6 +112,7 @@ export const sendMessage = mutation({
       lastMessageId: messageId,
       lastMessageText: trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed,
       lastMessageTime: Date.now(),
+      lastMessageSenderId: userId,
     });
 
     // Increment unread count for every OTHER member
@@ -89,54 +131,42 @@ export const sendMessage = mutation({
   },
 });
 
-// ─── Toggle reaction ───────────────────────────────────────────────────────
+// ─── Edit a message ────────────────────────────────────────────────────────
 
 /**
- * Adds or removes an emoji reaction from a message for the current user.
+ * Updates the text of a message. Only the original sender may edit.
+ * Sets edited=true and editedAt to the current timestamp.
  */
-export const toggleReaction = mutation({
+export const editMessage = mutation({
   args: {
     messageId: v.id("messages"),
-    emoji: v.string(),
+    text: v.string(),
   },
-  handler: async (ctx, { messageId, emoji }) => {
+  handler: async (ctx, { messageId, text }) => {
     const userId = await requireAuthUserId(ctx);
 
     const message = await ctx.db.get(messageId);
     if (!message) throw new Error("Message not found");
+    if (message.senderId !== userId) throw new Error("Only the sender can edit this message");
+    if (message.deleted) throw new Error("Cannot edit a deleted message");
 
-    const reactions: { emoji: string; userIds: Id<"users">[] }[] =
-      message.reactions ?? [];
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("Message text cannot be empty");
 
-    const existing = reactions.find((r) => r.emoji === emoji);
-
-    let updated: { emoji: string; userIds: Id<"users">[] }[];
-
-    if (existing) {
-      const hasReacted = existing.userIds.includes(userId);
-      updated = reactions
-        .map((r) => {
-          if (r.emoji !== emoji) return r;
-          return {
-            emoji,
-            userIds: hasReacted
-              ? r.userIds.filter((id) => id !== userId)
-              : [...r.userIds, userId],
-          };
-        })
-        .filter((r) => r.userIds.length > 0);
-    } else {
-      updated = [...reactions, { emoji, userIds: [userId] }];
-    }
-
-    await ctx.db.patch(messageId, { reactions: updated });
+    await ctx.db.patch(messageId, {
+      text: trimmed,
+      edited: true,
+      editedAt: Date.now(),
+    });
   },
 });
 
 // ─── Delete (soft) a message ───────────────────────────────────────────────
 
 /**
- * Marks a message as deleted. Only the original sender can delete.
+ * Soft-deletes a message. Only the original sender may delete.
+ * The row is kept for reaction/reply chain integrity; the content
+ * is replaced with a tombstone on read (see listMessages above).
  */
 export const deleteMessage = mutation({
   args: { messageId: v.id("messages") },
@@ -145,8 +175,20 @@ export const deleteMessage = mutation({
 
     const message = await ctx.db.get(messageId);
     if (!message) throw new Error("Message not found");
-    if (message.senderId !== userId) throw new Error("Not authorized");
+    if (message.senderId !== userId) throw new Error("Only the sender can delete this message");
 
-    await ctx.db.patch(messageId, { deleted: true });
+    await ctx.db.patch(messageId, {
+      deleted: true,
+      deletedAt: Date.now(),
+    });
+
+    // If this was the last message in the conversation, update the snapshot
+    const conversation = await ctx.db.get(message.conversationId);
+    if (conversation?.lastMessageId === messageId) {
+      await ctx.db.patch(message.conversationId, {
+        lastMessageText: "Message deleted",
+      });
+    }
   },
 });
+

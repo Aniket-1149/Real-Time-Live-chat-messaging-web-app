@@ -6,7 +6,8 @@ import { Id } from "@/convex/_generated/dataModel";
 
 /**
  * Returns a live list of messages for a given conversation.
- * Automatically re-renders when new messages arrive (Convex reactive query).
+ * Soft-deleted messages are returned as tombstones (text: null, deleted: true).
+ * Automatically re-renders when new messages arrive.
  */
 export function useMessages(conversationId: Id<"conversations"> | null) {
   return useQuery(
@@ -17,24 +18,27 @@ export function useMessages(conversationId: Id<"conversations"> | null) {
 
 /**
  * Returns the mutation to send a message into a conversation.
+ * Supports optional replyToId for threaded replies.
  *
  * Usage:
  *   const sendMessage = useSendMessage();
  *   await sendMessage({ conversationId, text });
+ *   await sendMessage({ conversationId, text, replyToId });
  */
 export function useSendMessage() {
   return useMutation(api.messages.sendMessage);
 }
 
 /**
- * Returns the mutation to toggle an emoji reaction on a message.
+ * Returns the mutation to edit an existing message.
+ * Only the original sender can edit; deleted messages cannot be edited.
  */
-export function useToggleReaction() {
-  return useMutation(api.messages.toggleReaction);
+export function useEditMessage() {
+  return useMutation(api.messages.editMessage);
 }
 
 /**
- * Returns the mutation to soft-delete a message.
+ * Returns the mutation to soft-delete a message (sender-only).
  */
 export function useDeleteMessage() {
   return useMutation(api.messages.deleteMessage);

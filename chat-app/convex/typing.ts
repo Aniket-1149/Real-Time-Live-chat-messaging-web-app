@@ -2,14 +2,19 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireAuthUserId } from "./helpers";
 
-/** Stale threshold: typing indicators older than 5 s are ignored */
-const TYPING_TTL_MS = 5000;
+/** Stale threshold: typing indicators older than 5 s are ignored on read */
+const TYPING_TTL_MS = 5_000;
 
 // ─── Get active typers in a conversation ──────────────────────────────────
 
 /**
- * Returns user IDs (and names) of people currently typing in a conversation.
- * Stale indicators (older than TYPING_TTL_MS) are filtered out.
+ * Returns the name + userId of every user currently typing in a conversation,
+ * excluding the caller. Stale records (older than TYPING_TTL_MS) are filtered
+ * out so there is no need for a cleanup job.
+ *
+ * This query subscribes to the `typing` table via the by_conversation index,
+ * so any keystroke from any participant triggers a real-time push to all
+ * subscribers of this conversation.
  */
 export const getTypingUsers = query({
   args: { conversationId: v.id("conversations") },
@@ -18,7 +23,7 @@ export const getTypingUsers = query({
     const cutoff = Date.now() - TYPING_TTL_MS;
 
     const indicators = await ctx.db
-      .query("typingIndicators")
+      .query("typing")
       .withIndex("by_conversation", (q: any) => q.eq("conversationId", conversationId))
       .collect();
 
@@ -40,8 +45,10 @@ export const getTypingUsers = query({
 // ─── Set / clear typing indicator ─────────────────────────────────────────
 
 /**
- * Upserts a typing indicator for the current user.
- * Call with isTyping=true on keystroke and isTyping=false on blur/send.
+ * Upserts a typing indicator for the current user in a conversation.
+ *
+ * Call with isTyping=true on every keystroke (debounced in the hook).
+ * Call with isTyping=false on send / blur / component unmount.
  */
 export const setTyping = mutation({
   args: {
@@ -52,7 +59,7 @@ export const setTyping = mutation({
     const userId = await requireAuthUserId(ctx);
 
     const existing = await ctx.db
-      .query("typingIndicators")
+      .query("typing")
       .withIndex("by_user_conversation", (q: any) =>
         q.eq("userId", userId).eq("conversationId", conversationId)
       )
@@ -62,7 +69,7 @@ export const setTyping = mutation({
       if (existing) {
         await ctx.db.patch(existing._id, { updatedAt: Date.now() });
       } else {
-        await ctx.db.insert("typingIndicators", {
+        await ctx.db.insert("typing", {
           conversationId,
           userId,
           updatedAt: Date.now(),
@@ -75,3 +82,4 @@ export const setTyping = mutation({
     }
   },
 });
+

@@ -3,24 +3,28 @@ import { Id } from "@/convex/_generated/dataModel";
 /** User presence status */
 export type Status = "online" | "idle" | "dnd" | "offline";
 
-/** Convex user record shape (as returned by queries) */
+/** Convex user record shape (profile only — no presence fields) */
 export interface AppUser {
   _id: Id<"users">;
   clerkId: string;
   name: string;
   email: string;
   imageUrl: string;
+  displayName?: string;
+  /** Presence status — joined from the presence table in enriched queries */
   status: Status;
   lastSeenAt: number;
 }
 
-/** Reaction shape (Convex-native) */
-export interface Reaction {
+/** Grouped reaction as returned by reactions.getReactions */
+export interface GroupedReaction {
   emoji: string;
-  userIds: Id<"users">[];
+  count: number;
+  userIds: string[];
+  selfReacted: boolean;
 }
 
-/** Message as returned by listMessages query */
+/** Message as returned by messages.listMessages (enriched) */
 export interface AppMessage {
   _id: Id<"messages">;
   _creationTime: number;
@@ -28,53 +32,80 @@ export interface AppMessage {
   senderId: Id<"users">;
   senderName: string;
   senderImageUrl: string;
-  text: string;
-  reactions?: Reaction[];
-  deleted?: boolean;
+  /** null when the message is a soft-delete tombstone */
+  text: string | null;
+  deleted: boolean;
+  deletedAt?: number | null;
+  edited: boolean;
+  editedAt?: number | null;
+  replyToId?: Id<"messages"> | null;
 }
 
-/** Conversation as returned by listConversations query */
+/** DM conversation as returned by conversations.listConversations */
 export interface AppConversation {
   _id: Id<"conversations">;
   _creationTime: number;
+  type: "dm" | "group";
   participantIds: Id<"users">[];
   lastMessageText?: string;
   lastMessageTime?: number;
-  otherUser: AppUser;
+  lastMessageSenderId?: Id<"users">;
   unreadCount: number;
+  lastReadMessageId?: Id<"messages"> | null;
+  memberCount: number;
+  /** DM only */
+  otherUser?: AppUser;
+  /** Group only */
+  name?: string;
+  imageUrl?: string;
 }
 
 // ── Adapters ──────────────────────────────────────────────────────────────
-// These convert Convex data shapes → the prop shapes expected by UI components.
+// Convert Convex data → the prop shapes the UI components expect.
 
-/** Converts AppConversation → the `Conversation` shape the UI components expect */
+/** Converts AppConversation → the `Conversation` shape the sidebar expects */
 export function toUIConversation(conv: AppConversation) {
+  const isDM = conv.type === "dm" && conv.otherUser;
+
   return {
     id: conv._id as string,
-    user: {
-      id: conv.otherUser._id as string,
-      name: conv.otherUser.name,
-      avatar: conv.otherUser.imageUrl,
-      status: conv.otherUser.status as Status,
-    },
+    type: conv.type,
+    user: isDM
+      ? {
+          id: conv.otherUser!._id as string,
+          name: conv.otherUser!.displayName ?? conv.otherUser!.name,
+          avatar: conv.otherUser!.imageUrl,
+          status: conv.otherUser!.status as Status,
+        }
+      : {
+          id: conv._id as string,
+          name: conv.name ?? "Group",
+          avatar:
+            conv.imageUrl ??
+            `https://api.dicebear.com/9.x/identicon/svg?seed=${conv._id}`,
+          status: "online" as Status,
+        },
     lastMessage: conv.lastMessageText ?? "",
     lastMessageTime: conv.lastMessageTime
       ? new Date(conv.lastMessageTime)
       : new Date(conv._creationTime),
     unreadCount: conv.unreadCount,
+    memberCount: conv.memberCount,
   };
 }
 
-/** Converts AppMessage → the `Message` shape the UI components expect */
+/** Converts AppMessage → the `Message` shape the chat window expects */
 export function toUIMessage(msg: AppMessage, currentUserId: Id<"users">) {
   return {
     id: msg._id as string,
     senderId: msg.senderId === currentUserId ? "me" : (msg.senderId as string),
-    text: msg.text,
+    senderName: msg.senderName,
+    senderImageUrl: msg.senderImageUrl,
+    text: msg.deleted ? "This message was deleted" : (msg.text ?? ""),
     timestamp: new Date(msg._creationTime),
-    reactions: msg.reactions?.map((r) => ({
-      emoji: r.emoji,
-      count: r.userIds.length,
-    })),
+    deleted: msg.deleted,
+    edited: msg.edited,
+    replyToId: msg.replyToId ?? null,
   };
 }
+

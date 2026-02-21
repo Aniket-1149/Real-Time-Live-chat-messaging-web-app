@@ -1,35 +1,45 @@
 "use client";
 
 import { useUser } from "@clerk/nextjs";
-import { useCurrentUser } from "./useCurrentUser";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 
 /**
- * Merges Clerk's `useUser()` with the Convex user record.
+ * Merges Clerk's `useUser()` with the Convex user + presence records.
  *
  * Returns:
  *  - `isLoading`  — true while either Clerk or Convex is still initialising
  *  - `isSignedIn` — true once Clerk confirms the session
  *  - `isSyncing`  — Clerk loaded + signed in, but Convex record not yet found
- *  - `user`       — merged object; avatar/name fall back to Clerk data if
- *                   the Convex record hasn't arrived yet
+ *  - `user`       — merged object with profile + live presence status;
+ *                   falls back to Clerk data while Convex sync is pending
  */
 export function useAuthUser() {
   const { isLoaded: clerkLoaded, isSignedIn, user: clerkUser } = useUser();
-  const convexUser = useCurrentUser();
+
+  // These run as skip-able reactive queries
+  const convexUser = useQuery(api.users.getCurrentUser);
+  const myPresence = useQuery(api.presence.getMyPresence);
 
   const isLoading = !clerkLoaded || convexUser === undefined;
   // Clerk is loaded + signed in, but Convex hasn't written the record yet
   const isSyncing = clerkLoaded && isSignedIn && convexUser === null;
+
+  const status = (myPresence?.status ?? "offline") as
+    | "online"
+    | "idle"
+    | "dnd"
+    | "offline";
 
   const user =
     convexUser !== null && convexUser !== undefined
       ? {
           id: convexUser._id as string,
           clerkId: convexUser.clerkId,
-          name: convexUser.name,
+          name: convexUser.displayName ?? convexUser.name,
           email: convexUser.email,
           avatar: convexUser.imageUrl,
-          status: convexUser.status as "online" | "idle" | "dnd" | "offline",
+          status,
         }
       : clerkUser
       ? {
@@ -46,3 +56,4 @@ export function useAuthUser() {
 
   return { isLoading, isSignedIn: isSignedIn ?? false, isSyncing, user };
 }
+

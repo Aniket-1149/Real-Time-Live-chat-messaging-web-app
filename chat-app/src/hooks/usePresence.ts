@@ -14,30 +14,30 @@ import { api } from "@/convex/_generated/api";
  * Mount this hook once in the root chat layout.
  */
 export function usePresence() {
-  const updatePresence = useMutation(api.users.updatePresence);
+  const setPresence = useMutation(api.presence.setPresence);
 
   useEffect(() => {
     // Set online immediately
-    updatePresence({ status: "online" }).catch(console.error);
+    setPresence({ status: "online" }).catch(console.error);
 
     // Heartbeat every 30 s
     const heartbeat = setInterval(() => {
-      updatePresence({ status: "online" }).catch(console.error);
+      setPresence({ status: "online" }).catch(console.error);
     }, 30_000);
 
     // Page visibility: go idle when hidden
     const handleVisibility = () => {
       if (document.hidden) {
-        updatePresence({ status: "idle" }).catch(console.error);
+        setPresence({ status: "idle" }).catch(console.error);
       } else {
-        updatePresence({ status: "online" }).catch(console.error);
+        setPresence({ status: "online" }).catch(console.error);
       }
     };
     document.addEventListener("visibilitychange", handleVisibility);
 
     // Set offline on unload
     const handleUnload = () => {
-      updatePresence({ status: "offline" }).catch(console.error);
+      setPresence({ status: "offline" }).catch(console.error);
     };
     window.addEventListener("beforeunload", handleUnload);
 
@@ -45,7 +45,7 @@ export function usePresence() {
       clearInterval(heartbeat);
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("beforeunload", handleUnload);
-      updatePresence({ status: "offline" }).catch(console.error);
+      setPresence({ status: "offline" }).catch(console.error);
     };
-  }, [updatePresence]);
+  }, [setPresence]);
 }

@@ -7,15 +7,18 @@ import { Id } from "./_generated/dataModel";
 
 /**
  * Returns all conversations the authenticated user is a member of,
- * enriched with the other participant's profile and the unread count.
- * Results are sorted newest-message-first.
+ * enriched with context needed by the sidebar list:
+ *
+ *  DM    → otherUser profile + presence status
+ *  Group → name, imageUrl, member count
+ *
+ * Sorted newest-last-message-first.
  */
 export const listConversations = query({
   args: {},
   handler: async (ctx) => {
     const userId = await requireAuthUserId(ctx);
 
-    // All memberships for this user
     const memberships = await ctx.db
       .query("conversationMembers")
       .withIndex("by_user", (q: any) => q.eq("userId", userId))
@@ -26,75 +29,151 @@ export const listConversations = query({
         const conversation = await ctx.db.get(m.conversationId);
         if (!conversation) return null;
 
-        // Find the other participant
-        const otherUserId = conversation.participantIds.find(
-          (id: Id<"users">) => id !== userId
-        );
-        if (!otherUserId) return null;
+        const memberCount = (
+          await ctx.db
+            .query("conversationMembers")
+            .withIndex("by_conversation", (q: any) =>
+              q.eq("conversationId", m.conversationId)
+            )
+            .collect()
+        ).length;
 
-        const otherUser = await ctx.db.get(otherUserId);
-        if (!otherUser) return null;
+        if (conversation.type === "dm") {
+          // Find the other participant
+          const otherUserId = conversation.participantIds.find(
+            (id: Id<"users">) => id !== userId
+          );
+          if (!otherUserId) return null;
 
-        return {
-          ...conversation,
-          otherUser,
-          unreadCount: m.unreadCount,
-        };
+          const otherUser = await ctx.db.get(otherUserId);
+          if (!otherUser) return null;
+
+          // Fetch presence separately so profile reads don't fan out on heartbeats
+          const presence = await ctx.db
+            .query("presence")
+            .withIndex("by_user", (q: any) => q.eq("userId", otherUserId))
+            .unique();
+
+          return {
+            ...conversation,
+            type: "dm" as const,
+            otherUser: {
+              ...otherUser,
+              status: presence?.status ?? "offline",
+              lastSeenAt: presence?.lastSeenAt ?? 0,
+            },
+            unreadCount: m.unreadCount,
+            lastReadMessageId: m.lastReadMessageId ?? null,
+            memberCount,
+          };
+        } else {
+          // Group conversation
+          return {
+            ...conversation,
+            type: "group" as const,
+            unreadCount: m.unreadCount,
+            lastReadMessageId: m.lastReadMessageId ?? null,
+            memberCount,
+          };
+        }
       })
     );
 
     return results
       .filter(Boolean)
-      .sort(
-        (a, b) =>
-          (b!.lastMessageTime ?? 0) - (a!.lastMessageTime ?? 0)
-      );
+      .sort((a, b) => (b!.lastMessageTime ?? 0) - (a!.lastMessageTime ?? 0));
   },
 });
 
-// ─── Get or create a direct conversation ─────────────────────────────────
+// ─── Get or create a DM conversation ─────────────────────────────────────
 
 /**
  * Finds an existing DM conversation between the caller and `otherUserId`,
- * or creates one if it doesn't exist. Returns the conversation ID.
+ * or creates one. Returns the conversation ID.
+ * Deduplication is guaranteed by the sorted participantIds pair.
  */
 export const getOrCreateConversation = mutation({
   args: { otherUserId: v.id("users") },
   handler: async (ctx, { otherUserId }) => {
     const userId = await requireAuthUserId(ctx);
-    if (userId === otherUserId) throw new Error("Cannot chat with yourself");
+    if (userId === otherUserId) throw new Error("Cannot start a conversation with yourself");
 
-    // Sort IDs so participantIds is always deterministic
     const participantIds = [userId, otherUserId].sort() as Id<"users">[];
 
-    // Check if conversation already exists
     const existing = await ctx.db
       .query("conversations")
-      .withIndex("by_participants", (q: any) =>
-        q.eq("participantIds", participantIds)
-      )
+      .withIndex("by_participants", (q: any) => q.eq("participantIds", participantIds))
       .unique();
 
     if (existing) return existing._id;
 
-    // Create new conversation
     const conversationId = await ctx.db.insert("conversations", {
+      type: "dm",
       participantIds,
-      lastMessageText: undefined,
-      lastMessageTime: undefined,
     });
 
-    // Create membership rows for both participants
+    const now = Date.now();
+
     await ctx.db.insert("conversationMembers", {
       conversationId,
       userId,
       unreadCount: 0,
+      joinedAt: now,
     });
     await ctx.db.insert("conversationMembers", {
       conversationId,
       userId: otherUserId,
       unreadCount: 0,
+      joinedAt: now,
     });
+
+    return conversationId;
+  },
+});
+
+// ─── Create a group conversation ─────────────────────────────────────────
+
+/**
+ * Creates a new group conversation with the caller as admin.
+ * `memberIds` must include at least one other user (not the caller).
+ */
+export const createGroup = mutation({
+  args: {
+    name: v.string(),
+    memberIds: v.array(v.id("users")),
+    imageUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, { name, memberIds, imageUrl }) => {
+    const userId = await requireAuthUserId(ctx);
+
+    const trimmedName = name.trim();
+    if (!trimmedName) throw new Error("Group name is required");
+
+    // Deduplicate and always include the creator
+    const allMemberIds = Array.from(new Set([userId, ...memberIds])) as Id<"users">[];
+    if (allMemberIds.length < 2) throw new Error("A group must have at least 2 members");
+
+    const conversationId = await ctx.db.insert("conversations", {
+      type: "group",
+      name: trimmedName,
+      imageUrl,
+      createdBy: userId,
+      participantIds: allMemberIds,
+    });
+
+    const now = Date.now();
+
+    await Promise.all(
+      allMemberIds.map((memberId) =>
+        ctx.db.insert("conversationMembers", {
+          conversationId,
+          userId: memberId,
+          unreadCount: 0,
+          role: memberId === userId ? "admin" : "member",
+          joinedAt: now,
+        })
+      )
+    );
 
     return conversationId;
   },
@@ -103,11 +182,15 @@ export const getOrCreateConversation = mutation({
 // ─── Mark conversation as read ────────────────────────────────────────────
 
 /**
- * Resets the unread counter for the authenticated user in a conversation.
+ * Resets the unread counter and records the lastReadMessageId
+ * for the authenticated user in a conversation.
  */
 export const markConversationRead = mutation({
-  args: { conversationId: v.id("conversations") },
-  handler: async (ctx, { conversationId }) => {
+  args: {
+    conversationId: v.id("conversations"),
+    lastReadMessageId: v.optional(v.id("messages")),
+  },
+  handler: async (ctx, { conversationId, lastReadMessageId }) => {
     const userId = await requireAuthUserId(ctx);
 
     const membership = await ctx.db
@@ -118,7 +201,56 @@ export const markConversationRead = mutation({
       .unique();
 
     if (membership) {
-      await ctx.db.patch(membership._id, { unreadCount: 0 });
+      const patch: Record<string, any> = { unreadCount: 0 };
+      if (lastReadMessageId !== undefined) patch.lastReadMessageId = lastReadMessageId;
+      await ctx.db.patch(membership._id, patch);
     }
   },
 });
+
+// ─── Leave a group conversation ───────────────────────────────────────────
+
+/**
+ * Removes the authenticated user from a group conversation.
+ * The last admin leaving will promote the next member to admin automatically.
+ * DM conversations cannot be "left" — archive on the client side instead.
+ */
+export const leaveConversation = mutation({
+  args: { conversationId: v.id("conversations") },
+  handler: async (ctx, { conversationId }) => {
+    const userId = await requireAuthUserId(ctx);
+
+    const conversation = await ctx.db.get(conversationId);
+    if (!conversation) throw new Error("Conversation not found");
+    if (conversation.type !== "group") throw new Error("Can only leave group conversations");
+
+    const membership = await ctx.db
+      .query("conversationMembers")
+      .withIndex("by_user_conversation", (q: any) =>
+        q.eq("userId", userId).eq("conversationId", conversationId)
+      )
+      .unique();
+
+    if (!membership) throw new Error("Not a member of this conversation");
+
+    await ctx.db.delete(membership._id);
+
+    // Remove from participantIds snapshot
+    const remaining = conversation.participantIds.filter(
+      (id: Id<"users">) => id !== userId
+    );
+    await ctx.db.patch(conversationId, { participantIds: remaining });
+
+    // If the leaving user was admin, promote the oldest remaining member
+    if (membership.role === "admin" && remaining.length > 0) {
+      const nextMembership = await ctx.db
+        .query("conversationMembers")
+        .withIndex("by_conversation", (q: any) => q.eq("conversationId", conversationId))
+        .first();
+      if (nextMembership) {
+        await ctx.db.patch(nextMembership._id, { role: "admin" });
+      }
+    }
+  },
+});
+

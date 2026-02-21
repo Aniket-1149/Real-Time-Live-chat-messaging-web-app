@@ -3,9 +3,6 @@ import { QueryCtx, MutationCtx } from "./_generated/server";
 /**
  * Resolves the current authenticated user's Convex _id from the Clerk JWT.
  *
- * Convex stores the Clerk subject (user ID) in the identity's `subject` field.
- * We look up the matching user row and return its _id.
- *
  * Returns null when called from an unauthenticated context.
  */
 export async function getAuthUserId(
@@ -32,3 +29,26 @@ export async function requireAuthUserId(
   if (!userId) throw new Error("Unauthenticated");
   return userId;
 }
+
+/**
+ * Returns the full user row for the authenticated caller.
+ * Throws if unauthenticated or if the user record does not exist yet.
+ *
+ * Use this in mutations/queries that need the caller's profile data
+ * (name, imageUrl, etc.) in a single helper call.
+ */
+export async function getAuthUser(
+  ctx: QueryCtx | MutationCtx
+): Promise<any> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Unauthenticated");
+
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", identity.subject))
+    .unique();
+
+  if (!user) throw new Error("User not found — webhook may not have synced yet");
+  return user;
+}
+
