@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from "react";
 import { ArrowLeft, Phone, Video, MoreVertical } from "lucide-react";
-import MessageBubble from "./MessageBubble";
+import MessageBubble, { Message } from "./MessageBubble";
 import MessageInput from "./MessageInput";
 import TypingIndicator from "./TypingIndicator";
 import EmptyState from "./EmptyState";
@@ -24,18 +24,10 @@ interface ConversationData {
   unreadCount: number;
 }
 
-interface Message {
-  id: string;
-  senderId: string;
-  text: string;
-  timestamp: Date;
-  reactions?: { emoji: string; count: number }[];
-}
-
 interface ChatWindowProps {
   conversation: ConversationData | null;
   messages: Message[];
-  onSendMessage: (text: string) => void;
+  onSendMessage: (text: string) => Promise<void>;
   onBack: () => void;
   showBack: boolean;
   /** Names of users currently typing (from Convex real-time query) */
@@ -111,8 +103,10 @@ const ChatWindow = ({
               key={msg.id}
               message={msg}
               isOwn={msg.senderId === "me"}
-              senderAvatar={user.avatar}
-              senderName={user.name}
+              // Per-message avatar/name take precedence; fall back to
+              // the conversation user for legacy or missing values.
+              senderAvatar={msg.senderImageUrl || user.avatar}
+              senderName={msg.senderName || user.name}
             />
           ))
         )}

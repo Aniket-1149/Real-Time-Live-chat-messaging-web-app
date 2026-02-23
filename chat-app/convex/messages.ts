@@ -30,6 +30,10 @@ export const listMessages = query({
         // Always fetch sender so deleted-tombstones still show sender info
         const sender = await ctx.db.get(msg.senderId);
 
+        // sentAt is the explicit send time; fall back to _creationTime for
+        // any rows written before this field was added.
+        const sentAt: number = msg.sentAt ?? msg._creationTime;
+
         if (msg.deleted) {
           // Return a tombstone — content scrubbed, metadata preserved
           return {
@@ -37,9 +41,10 @@ export const listMessages = query({
             _creationTime: msg._creationTime,
             conversationId: msg.conversationId,
             senderId: msg.senderId,
-            senderName: sender?.name ?? "Unknown",
+            senderName: sender?.displayName ?? sender?.name ?? "Unknown",
             senderImageUrl: sender?.imageUrl ?? "",
             text: null,
+            sentAt,
             deleted: true,
             deletedAt: msg.deletedAt ?? null,
             edited: false,
@@ -53,9 +58,10 @@ export const listMessages = query({
           _creationTime: msg._creationTime,
           conversationId: msg.conversationId,
           senderId: msg.senderId,
-          senderName: sender?.name ?? "Unknown",
+          senderName: sender?.displayName ?? sender?.name ?? "Unknown",
           senderImageUrl: sender?.imageUrl ?? "",
           text: msg.text,
+          sentAt,
           deleted: false,
           deletedAt: null,
           edited: msg.edited ?? false,
@@ -102,6 +108,7 @@ export const sendMessage = mutation({
       conversationId,
       senderId: userId,
       text: trimmed,
+      sentAt: Date.now(),
       ...(replyToId ? { replyToId } : {}),
       deleted: false,
       edited: false,

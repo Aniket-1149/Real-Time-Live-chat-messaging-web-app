@@ -136,6 +136,14 @@ export default defineSchema({
     text: v.string(),
 
     /**
+     * Explicit send timestamp (Unix ms).
+     * Stored separately from _creationTime so the UI always has a
+     * guaranteed, sortable wall-clock time that survives any future
+     * data migrations or imports.
+     */
+    sentAt: v.number(),
+
+    /**
      * Optional reference to the message this one is replying to.
      * Enables threaded/quoted replies without a separate threads table.
      */

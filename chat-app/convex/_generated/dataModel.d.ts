@@ -100,6 +100,8 @@ export type DataModel = {
       conversationId: Id<"conversations">;
       senderId: Id<"users">;
       text: string;
+      /** Explicit send timestamp (Unix ms) — always present for new rows */
+      sentAt: number;
       replyToId?: Id<"messages">;
       deleted: boolean;
       deletedAt?: number;
@@ -108,7 +110,7 @@ export type DataModel = {
     };
     fieldPaths:
       | "_id" | "_creationTime" | "conversationId" | "senderId" | "text"
-      | "replyToId" | "deleted" | "deletedAt" | "edited" | "editedAt";
+      | "sentAt" | "replyToId" | "deleted" | "deletedAt" | "edited" | "editedAt";
     indexes: {};
     searchIndexes: {};
     vectorIndexes: {};

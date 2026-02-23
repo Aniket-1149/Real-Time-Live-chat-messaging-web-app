@@ -34,6 +34,8 @@ export interface AppMessage {
   senderImageUrl: string;
   /** null when the message is a soft-delete tombstone */
   text: string | null;
+  /** Explicit send timestamp (Unix ms) — always use this for display */
+  sentAt: number;
   deleted: boolean;
   deletedAt?: number | null;
   edited: boolean;
@@ -102,9 +104,11 @@ export function toUIMessage(msg: AppMessage, currentUserId: Id<"users">) {
     senderName: msg.senderName,
     senderImageUrl: msg.senderImageUrl,
     text: msg.deleted ? "This message was deleted" : (msg.text ?? ""),
-    timestamp: new Date(msg._creationTime),
+    /** Use explicit sentAt — falls back to _creationTime for legacy rows */
+    timestamp: new Date(msg.sentAt ?? msg._creationTime),
     deleted: msg.deleted,
     edited: msg.edited,
+    editedAt: msg.editedAt ? new Date(msg.editedAt) : null,
     replyToId: msg.replyToId ?? null,
   };
 }
