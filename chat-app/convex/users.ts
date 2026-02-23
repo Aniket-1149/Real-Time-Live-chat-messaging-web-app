@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "./helpers";
+import { getEffectiveStatus } from "./presence";
 
 // ─── Get current user ──────────────────────────────────────────────────────
 
@@ -76,8 +77,10 @@ export const searchUsers = query({
           displayName: u.displayName ?? null,
           email: u.email,
           imageUrl: u.imageUrl,
-          status: (presence?.status ?? "offline") as
-            | "online" | "idle" | "dnd" | "offline",
+          status: getEffectiveStatus(
+            presence?.status ?? "offline",
+            presence?.lastSeenAt ?? 0
+          ),
           lastSeenAt: presence?.lastSeenAt ?? 0,
         };
       })

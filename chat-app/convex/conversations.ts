@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireAuthUserId } from "./helpers";
 import { Id } from "./_generated/dataModel";
+import { getEffectiveStatus } from "./presence";
 
 // ─── List conversations for the current user ──────────────────────────────
 
@@ -59,7 +60,10 @@ export const listConversations = query({
             type: "dm" as const,
             otherUser: {
               ...otherUser,
-              status: presence?.status ?? "offline",
+              status: getEffectiveStatus(
+                presence?.status ?? "offline",
+                presence?.lastSeenAt ?? 0
+              ),
               lastSeenAt: presence?.lastSeenAt ?? 0,
             },
             unreadCount: m.unreadCount,

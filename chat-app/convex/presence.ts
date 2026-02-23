@@ -5,32 +5,76 @@ import { getAuthUserId } from "./helpers";
 // ─── Constants ─────────────────────────────────────────────────────────────
 
 /**
- * A user is considered "online" if their last heartbeat was within this window.
- * Matches the 30 s interval in usePresence.ts.
+ * How often the client sends a heartbeat. Must match HEARTBEAT_INTERVAL_MS
+ * in usePresence.ts. Exported so backend helpers can reference the same value.
  */
-const ONLINE_THRESHOLD_MS = 60_000; // 2 missed heartbeats → idle
+export const HEARTBEAT_INTERVAL_MS = 30_000; // 30 s
+
+/**
+ * A presence row is considered stale (user is effectively offline) if its
+ * lastSeenAt is older than this window. Equals 3 missed heartbeats.
+ * Stale rows still exist in the DB — they are just treated as "offline" on
+ * read so we never need a scheduled cleanup job.
+ */
+export const PRESENCE_EXPIRY_MS = HEARTBEAT_INTERVAL_MS * 3; // 90 s
+
+// ─── Shared helper ────────────────────────────────────────────────────────
+
+/**
+ * Derives the effective display status from the stored status + lastSeenAt.
+ *
+ * A tab that crashed (no `beforeunload` fired) will leave status="online" in
+ * the DB indefinitely. This function overrides it with "offline" whenever the
+ * heartbeat has expired, regardless of what the stored status field says.
+ *
+ *   stored      lastSeenAt          →  effective
+ *   "online"    < 90 s ago          →  "online"
+ *   "online"    ≥ 90 s ago          →  "offline"   ← crash / hard-close
+ *   "idle"      < 90 s ago          →  "idle"
+ *   "idle"      ≥ 90 s ago          →  "offline"
+ *   "dnd"       any                 →  "dnd"        ← manual; no expiry
+ *   "offline"   any                 →  "offline"
+ */
+export function getEffectiveStatus(
+  status: string,
+  lastSeenAt: number
+): "online" | "idle" | "dnd" | "offline" {
+  // DND is a manual user choice — never expire it automatically
+  if (status === "dnd")     return "dnd";
+  if (status === "offline") return "offline";
+
+  const stale = Date.now() - lastSeenAt > PRESENCE_EXPIRY_MS;
+  if (stale) return "offline";
+
+  if (status === "idle") return "idle";
+  return "online";
+}
 
 // ─── Get presence for a single user ──────────────────────────────────────
 
 /**
- * Returns the presence row for any given user.
- * Callers subscribe reactively — status updates fan-out in real time.
+ * Returns the presence row for any given user, with the effective status
+ * already resolved (stale heartbeat → "offline").
  */
 export const getPresence = query({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
-    return await ctx.db
+    const row = await ctx.db
       .query("presence")
       .withIndex("by_user", (q: any) => q.eq("userId", userId))
       .unique();
+    if (!row) return null;
+    return {
+      ...row,
+      status: getEffectiveStatus(row.status, row.lastSeenAt),
+    };
   },
 });
 
 // ─── Batch get presence ───────────────────────────────────────────────────
 
 /**
- * Returns presence rows for an array of user IDs in one round trip.
- * Used by the conversation list to show status dots alongside each contact.
+ * Returns effective presence for an array of user IDs in one round trip.
  */
 export const batchGetPresence = query({
   args: { userIds: v.array(v.id("users")) },
@@ -43,10 +87,15 @@ export const batchGetPresence = query({
           .unique()
       )
     );
-    // Return a map of userId → presence so the client can look up O(1)
     const map: Record<string, { status: string; lastSeenAt: number } | null> = {};
     userIds.forEach((id: any, i: any) => {
-      map[id] = rows[i] ? { status: rows[i]!.status, lastSeenAt: rows[i]!.lastSeenAt } : null;
+      const row = rows[i];
+      map[id] = row
+        ? {
+            status: getEffectiveStatus(row.status, row.lastSeenAt),
+            lastSeenAt: row.lastSeenAt,
+          }
+        : null;
     });
     return map;
   },
@@ -55,18 +104,22 @@ export const batchGetPresence = query({
 // ─── Get own presence ─────────────────────────────────────────────────────
 
 /**
- * Returns the authenticated user's own presence row.
- * Used on first mount to restore last-known status.
+ * Returns the authenticated user's own presence row with effective status.
  */
 export const getMyPresence = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    return await ctx.db
+    const row = await ctx.db
       .query("presence")
       .withIndex("by_user", (q: any) => q.eq("userId", userId))
       .unique();
+    if (!row) return null;
+    return {
+      ...row,
+      status: getEffectiveStatus(row.status, row.lastSeenAt),
+    };
   },
 });
 
@@ -112,19 +165,18 @@ export const setPresence = mutation({
 // ─── Get all online users ─────────────────────────────────────────────────
 
 /**
- * Returns IDs of users who have a recent heartbeat (within ONLINE_THRESHOLD_MS).
- * Useful for an "online members" count in group chats.
+ * Returns IDs of users whose effective status is "online".
+ *
+ * We scan ALL presence rows (not just those with status="online") because a
+ * crashed tab leaves status="online" permanently; getEffectiveStatus demotes
+ * it to "offline" once the heartbeat has expired.
  */
 export const getOnlineUsers = query({
   args: {},
   handler: async (ctx) => {
-    const cutoff = Date.now() - ONLINE_THRESHOLD_MS;
-    const rows = await ctx.db
-      .query("presence")
-      .withIndex("by_status", (q: any) => q.eq("status", "online"))
-      .collect();
+    const rows = await ctx.db.query("presence").collect();
     return rows
-      .filter((r: any) => r.lastSeenAt > cutoff)
+      .filter((r: any) => getEffectiveStatus(r.status, r.lastSeenAt) === "online")
       .map((r: any) => r.userId);
   },
 });
