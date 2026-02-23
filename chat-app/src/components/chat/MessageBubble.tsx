@@ -1,7 +1,7 @@
 "use client";
 
-import { format, isToday, isYesterday } from "date-fns";
 import { Pencil } from "lucide-react";
+import { formatMessageTime, formatFullTimestamp } from "@/lib/formatTime";
 
 interface Reaction {
   emoji: string;
@@ -28,13 +28,6 @@ interface MessageBubbleProps {
   /** Fallback avatar when senderImageUrl is empty */
   senderAvatar?: string;
   senderName?: string;
-}
-
-/** Format timestamp: time only today, "Yesterday H:mm" yesterday, full date otherwise */
-function formatTimestamp(date: Date): string {
-  if (isToday(date))     return format(date, "h:mm a");
-  if (isYesterday(date)) return `Yesterday ${format(date, "h:mm a")}`;
-  return format(date, "MMM d, h:mm a");
 }
 
 const MessageBubble = ({ message, isOwn, senderAvatar, senderName }: MessageBubbleProps) => {
@@ -90,13 +83,16 @@ const MessageBubble = ({ message, isOwn, senderAvatar, senderName }: MessageBubb
 
         {/* Timestamp + edited badge */}
         <div className={`flex items-center gap-1 px-1 ${isOwn ? "flex-row-reverse" : "flex-row"}`}>
-          <span className="text-[10px] text-muted-foreground">
-            {formatTimestamp(message.timestamp)}
+          <span
+            className="text-[10px] text-muted-foreground"
+            title={formatFullTimestamp(message.timestamp)}
+          >
+            {formatMessageTime(message.timestamp)}
           </span>
           {message.edited && !message.deleted && (
             <span
               className="flex items-center gap-0.5 text-[10px] text-muted-foreground/70"
-              title={message.editedAt ? `Edited ${formatTimestamp(message.editedAt)}` : "Edited"}
+              title={message.editedAt ? `Edited ${formatFullTimestamp(message.editedAt)}` : "Edited"}
             >
               <Pencil className="w-2.5 h-2.5" />
               edited

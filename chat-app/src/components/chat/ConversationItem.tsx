@@ -1,6 +1,6 @@
 "use client";
 
-import { formatDistanceToNow } from "date-fns";
+import { formatConversationTime } from "@/lib/formatTime";
 import StatusDot from "./StatusDot";
 import { Status } from "@/types/chat";
 
@@ -46,7 +46,7 @@ const ConversationItem = ({ conversation, isActive, onOpenConversation }: Conver
         <div className="flex items-center justify-between">
           <span className="font-medium text-sm truncate">{user.name}</span>
           <span className="text-xs text-muted-foreground flex-shrink-0">
-            {formatDistanceToNow(lastMessageTime, { addSuffix: false })}
+            {formatConversationTime(lastMessageTime)}
           </span>
         </div>
         <p className="text-xs text-muted-foreground truncate mt-0.5">{lastMessage}</p>
