@@ -2,8 +2,25 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireAuthUserId } from "./helpers";
 
-/** Stale threshold: typing indicators older than 5 s are ignored on read */
-const TYPING_TTL_MS = 5_000;
+/**
+ * A typing indicator is considered stale after this window.
+ * Exported so the client hook can use the exact same value.
+ *
+ * Rule: TYPING_STOP_DELAY (hook) < TYPING_TTL_MS (backend)
+ * The hook must clear the indicator before the server would expire it,
+ * preventing ghost "X is typing" labels after the user stops.
+ *
+ *   hook stop delay : 2 000 ms  (fires setTyping=false after 2 s no keys)
+ *   backend TTL     : 3 000 ms  (filters stale rows at query time)
+ */
+export const TYPING_TTL_MS = 3_000;
+
+/**
+ * How often the hook re-sends setTyping(true) while the user is actively
+ * typing — acts as a heartbeat so the backend row stays fresh.
+ * Must be < TYPING_TTL_MS to prevent the row expiring mid-burst.
+ */
+export const TYPING_HEARTBEAT_MS = 2_000;
 
 // ─── Get active typers in a conversation ──────────────────────────────────
 

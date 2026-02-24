@@ -5,12 +5,15 @@ import { useCallback, useEffect, useRef } from "react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 
-/** Debounce delay for typing stop detection (ms) */
-const TYPING_STOP_DELAY = 1500;
+// ── Constants ──────────────────────────────────────────────────────────────
+// TYPING_STOP_DELAY must be < TYPING_TTL_MS (3 000 ms) so the hook clears
+// the DB row before the backend would expire it on its own.
+const TYPING_STOP_DELAY  = 2_000; // ms of inactivity → send setTyping(false)
+const TYPING_HEARTBEAT   = 2_000; // ms between re-sends while still typing
 
 /**
- * Returns live list of users currently typing in a conversation
- * (excluding the authenticated caller).
+ * Returns a live list of users currently typing in a conversation,
+ * excluding the authenticated caller.
  */
 export function useTypingUsers(conversationId: Id<"conversations"> | null) {
   return useQuery(
@@ -20,50 +23,78 @@ export function useTypingUsers(conversationId: Id<"conversations"> | null) {
 }
 
 /**
- * Returns a `reportTyping` callback to call on every keystroke.
- * Automatically sends setTyping(false) when the user stops typing.
+ * Returns `reportTyping` (call on every keystroke) and `stopTyping`
+ * (call on send / blur / unmount).
  *
- * Usage:
- *   const reportTyping = useTypingReporter(conversationId);
- *   <textarea onChange={() => reportTyping()} />
+ * Mutation strategy — avoids a round-trip on every keystroke:
+ *
+ *  1. First keystroke of a new burst  → setTyping(true)  immediately
+ *  2. Subsequent keystrokes           → do nothing (DB row is already fresh)
+ *  3. Every TYPING_HEARTBEAT ms       → setTyping(true)  to refresh updatedAt
+ *     while the user is still typing  (keeps row alive across slow typing)
+ *  4. TYPING_STOP_DELAY ms no keys    → setTyping(false) + clear heartbeat
+ *  5. stopTyping() called explicitly  → setTyping(false) immediately
  */
 export function useTypingReporter(conversationId: Id<"conversations"> | null) {
   const setTyping = useMutation(api.typing.setTyping);
-  const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isCurrentlyTyping = useRef(false);
 
-  // Clear typing indicator when conversation changes or component unmounts
+  // Refs — never stale-close over mutation or timers
+  const setTypingRef      = useRef(setTyping);
+  const convIdRef         = useRef(conversationId);
+  const isTypingRef       = useRef(false);
+  const stopTimerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => { setTypingRef.current = setTyping; },          [setTyping]);
+  useEffect(() => { convIdRef.current    = conversationId; },     [conversationId]);
+
+  // ── helpers ────────────────────────────────────────────────────────────
+
+  const clearTimers = useCallback(() => {
+    if (stopTimerRef.current)      { clearTimeout(stopTimerRef.current);      stopTimerRef.current      = null; }
+    if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+  }, []);
+
+  const sendStop = useCallback(() => {
+    clearTimers();
+    if (!isTypingRef.current) return;
+    isTypingRef.current = false;
+    const id = convIdRef.current;
+    if (id) setTypingRef.current({ conversationId: id, isTyping: false }).catch(() => {});
+  }, [clearTimers]);
+
+  // ── cleanup on conversation change or unmount ──────────────────────────
+
   useEffect(() => {
-    return () => {
-      if (isCurrentlyTyping.current && conversationId) {
-        setTyping({ conversationId, isTyping: false }).catch(() => {});
-      }
-    };
-  }, [conversationId, setTyping]);
+    return () => { sendStop(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+
+  // ── public API ─────────────────────────────────────────────────────────
 
   const reportTyping = useCallback(() => {
-    if (!conversationId) return;
+    const id = convIdRef.current;
+    if (!id) return;
 
-    // Mark as typing if not already
-    if (!isCurrentlyTyping.current) {
-      isCurrentlyTyping.current = true;
-      setTyping({ conversationId, isTyping: true }).catch(console.error);
+    // First keystroke of a new burst — send immediately
+    if (!isTypingRef.current) {
+      isTypingRef.current = true;
+      setTypingRef.current({ conversationId: id, isTyping: true }).catch(console.error);
+
+      // Heartbeat: re-send while typing to keep updatedAt fresh
+      heartbeatTimerRef.current = setInterval(() => {
+        if (isTypingRef.current && convIdRef.current) {
+          setTypingRef.current({ conversationId: convIdRef.current, isTyping: true }).catch(() => {});
+        }
+      }, TYPING_HEARTBEAT);
     }
 
-    // Reset stop timer
-    if (stopTimer.current) clearTimeout(stopTimer.current);
-    stopTimer.current = setTimeout(() => {
-      isCurrentlyTyping.current = false;
-      setTyping({ conversationId, isTyping: false }).catch(console.error);
-    }, TYPING_STOP_DELAY);
-  }, [conversationId, setTyping]);
+    // Restart the stop timer on every keystroke
+    if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+    stopTimerRef.current = setTimeout(sendStop, TYPING_STOP_DELAY);
+  }, [sendStop]);
 
-  const stopTyping = useCallback(() => {
-    if (!conversationId || !isCurrentlyTyping.current) return;
-    if (stopTimer.current) clearTimeout(stopTimer.current);
-    isCurrentlyTyping.current = false;
-    setTyping({ conversationId, isTyping: false }).catch(console.error);
-  }, [conversationId, setTyping]);
+  const stopTyping = useCallback(() => { sendStop(); }, [sendStop]);
 
   return { reportTyping, stopTyping };
 }

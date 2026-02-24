@@ -113,10 +113,8 @@ const ChatWindow = ({
         <div ref={bottomRef} />
       </div>
 
-      {/* Typing indicators (live from Convex) */}
-      {typingUsers.map((t) => (
-        <TypingIndicator key={t.userId} name={t.name} />
-      ))}
+      {/* Typing indicator — single component handles 0-N typers */}
+      <TypingIndicator typingUsers={typingUsers} />
 
       {/* Input */}
       <MessageInput
