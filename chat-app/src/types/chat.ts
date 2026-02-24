@@ -53,6 +53,7 @@ export interface AppConversation {
   lastMessageTime?: number;
   lastMessageSenderId?: Id<"users">;
   unreadCount: number;
+  lastReadAt?: number | null;
   lastReadMessageId?: Id<"messages"> | null;
   memberCount: number;
   /** DM only */

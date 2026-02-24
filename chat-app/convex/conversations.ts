@@ -39,6 +39,19 @@ export const listConversations = query({
             .collect()
         ).length;
 
+        // Compute unread count from timestamp: messages sent after the user
+        // last read this conversation (or after they joined if never read).
+        const readCutoff: number = m.lastReadAt ?? m.joinedAt ?? 0;
+        const unreadMessages = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation", (q: any) =>
+            q.eq("conversationId", m.conversationId)
+          )
+          .collect();
+        const unreadCount = unreadMessages.filter(
+          (msg: any) => (msg.sentAt ?? msg._creationTime) > readCutoff
+        ).length;
+
         if (conversation.type === "dm") {
           // Find the other participant
           const otherUserId = conversation.participantIds.find(
@@ -66,7 +79,8 @@ export const listConversations = query({
               ),
               lastSeenAt: presence?.lastSeenAt ?? 0,
             },
-            unreadCount: m.unreadCount,
+            unreadCount,
+            lastReadAt: m.lastReadAt ?? null,
             lastReadMessageId: m.lastReadMessageId ?? null,
             memberCount,
           };
@@ -75,7 +89,8 @@ export const listConversations = query({
           return {
             ...conversation,
             type: "group" as const,
-            unreadCount: m.unreadCount,
+            unreadCount,
+            lastReadAt: m.lastReadAt ?? null,
             lastReadMessageId: m.lastReadMessageId ?? null,
             memberCount,
           };
@@ -159,12 +174,14 @@ export const getOrCreateConversation = mutation({
       conversationId,
       userId,
       unreadCount: 0,
+      lastReadAt: now,
       joinedAt: now,
     });
     await ctx.db.insert("conversationMembers", {
       conversationId,
       userId: otherUserId,
       unreadCount: 0,
+      lastReadAt: now,
       joinedAt: now,
     });
 
@@ -210,6 +227,7 @@ export const createGroup = mutation({
           conversationId,
           userId: memberId,
           unreadCount: 0,
+          lastReadAt: now,
           role: memberId === userId ? "admin" : "member",
           joinedAt: now,
         })
@@ -242,7 +260,10 @@ export const markConversationRead = mutation({
       .unique();
 
     if (membership) {
-      const patch: Record<string, any> = { unreadCount: 0 };
+      const patch: Record<string, any> = {
+        unreadCount: 0,
+        lastReadAt: Date.now(),
+      };
       if (lastReadMessageId !== undefined) patch.lastReadMessageId = lastReadMessageId;
       await ctx.db.patch(membership._id, patch);
     }

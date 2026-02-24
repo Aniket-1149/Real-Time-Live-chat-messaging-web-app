@@ -81,12 +81,13 @@ export type DataModel = {
       userId: Id<"users">;
       unreadCount: number;
       lastReadMessageId?: Id<"messages">;
+      lastReadAt?: number;
       role?: "member" | "admin";
       joinedAt: number;
     };
     fieldPaths:
       | "_id" | "_creationTime" | "conversationId" | "userId"
-      | "unreadCount" | "lastReadMessageId" | "role" | "joinedAt";
+      | "unreadCount" | "lastReadMessageId" | "lastReadAt" | "role" | "joinedAt";
     indexes: {};
     searchIndexes: {};
     vectorIndexes: {};

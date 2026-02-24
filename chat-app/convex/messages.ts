@@ -122,18 +122,6 @@ export const sendMessage = mutation({
       lastMessageSenderId: userId,
     });
 
-    // Increment unread count for every OTHER member
-    const allMembers = await ctx.db
-      .query("conversationMembers")
-      .withIndex("by_conversation", (q: any) => q.eq("conversationId", conversationId))
-      .collect();
-
-    await Promise.all(
-      allMembers
-        .filter((m: any) => m.userId !== userId)
-        .map((m: any) => ctx.db.patch(m._id, { unreadCount: m.unreadCount + 1 }))
-    );
-
     return messageId;
   },
 });

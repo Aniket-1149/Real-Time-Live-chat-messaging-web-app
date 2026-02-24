@@ -112,6 +112,11 @@ export default defineSchema({
      * Used for precise read-receipt rendering.
      */
     lastReadMessageId: v.optional(v.id("messages")),
+    /**
+     * Unix ms timestamp of when this user last read this conversation.
+     * Unread count = messages where sentAt > lastReadAt.
+     */
+    lastReadAt: v.optional(v.number()),
 
     /**
      * Member role for group chats.
