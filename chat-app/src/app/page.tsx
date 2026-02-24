@@ -10,7 +10,7 @@ import ChatWindow from "@/components/chat/ChatWindow";
 import LoadingEmoji from "@/components/chat/LoadingEmoji";
 import NewConversationDialog from "@/components/chat/NewConversationDialog";
 import { useConversations, useMarkConversationRead, useGetOrCreateConversation } from "@/hooks/useConversations";
-import { useMessages, useSendMessage } from "@/hooks/useMessages";
+import { useMessages, useSendMessage, useConversationMeta } from "@/hooks/useMessages";
 import { useTypingUsers, useTypingReporter } from "@/hooks/useTyping";
 import { usePresence } from "@/hooks/usePresence";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -38,6 +38,9 @@ export default function ChatPage() {
 
   // Live messages for active conversation
   const messages = useMessages(activeConvId);
+
+  // Lightweight meta for smart auto-scroll (latest timestamp + unread count)
+  const conversationMeta = useConversationMeta(activeConvId);
 
   // Typing indicator hooks
   const typingUsers = useTypingUsers(activeConvId);
@@ -175,6 +178,9 @@ export default function ChatPage() {
           typingUsers={typingUsers ?? []}
           onTyping={reportTyping}
           onStopTyping={stopTyping}
+          latestMessageSentAt={conversationMeta?.latestMessageSentAt ?? null}
+          incomingUnreadCount={conversationMeta?.unreadCount ?? 0}
+          currentUserId={authUser.id}
         />
       )}
 

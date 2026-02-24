@@ -17,6 +17,24 @@ export function useMessages(conversationId: Id<"conversations"> | null) {
 }
 
 /**
+ * Returns lightweight metadata for the active conversation, polled live.
+ * Used by ChatWindow to drive smart auto-scroll without fetching message bodies.
+ *
+ *  latestMessageSentAt  – sentAt of the newest message (or null if empty).
+ *                         Watching this value change tells the window a new
+ *                         message has arrived.
+ *
+ *  unreadCount          – messages with sentAt > lastReadAt.
+ *                         Drives the "↓ N new" jump-button label.
+ */
+export function useConversationMeta(conversationId: Id<"conversations"> | null) {
+  return useQuery(
+    api.messages.getConversationMeta,
+    conversationId ? { conversationId } : "skip"
+  );
+}
+
+/**
  * Returns the mutation to send a message into a conversation.
  * Supports optional replyToId for threaded replies.
  *

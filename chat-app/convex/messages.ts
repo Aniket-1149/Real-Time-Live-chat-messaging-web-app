@@ -75,6 +75,68 @@ export const listMessages = query({
   },
 });
 
+// ─── Conversation meta (for smart auto-scroll) ────────────────────────────
+
+/**
+ * Lightweight query used by the frontend to drive smart auto-scroll.
+ * Returns two values without fetching full message bodies:
+ *
+ *  latestMessageSentAt  – sentAt of the newest (non-deleted) message,
+ *                         or null when the conversation is empty.
+ *                         The frontend detects "new message arrived" by
+ *                         watching this value change.
+ *
+ *  unreadCount          – number of messages sent after the caller's
+ *                         lastReadAt timestamp (same logic as listConversations).
+ *                         Drives the "↓ N new" jump button label.
+ */
+export const getConversationMeta = query({
+  args: { conversationId: v.id("conversations") },
+  handler: async (ctx, { conversationId }) => {
+    const userId = await requireAuthUserId(ctx);
+
+    // Fetch the caller's membership to get their read cursor
+    const membership = await ctx.db
+      .query("conversationMembers")
+      .withIndex("by_user_conversation", (q: any) =>
+        q.eq("userId", userId).eq("conversationId", conversationId)
+      )
+      .unique();
+
+    if (!membership) {
+      return { latestMessageSentAt: null, unreadCount: 0 };
+    }
+
+    const readCutoff: number = membership.lastReadAt ?? membership.joinedAt ?? 0;
+
+    // Fetch all messages in the conversation once — we need both the
+    // newest timestamp and the unread count.
+    const allMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation", (q: any) =>
+        q.eq("conversationId", conversationId)
+      )
+      .collect();
+
+    // Latest sentAt across ALL messages (including deleted tombstones, so
+    // the scroll trigger fires even when a message is deleted).
+    let latestMessageSentAt: number | null = null;
+    let unreadCount = 0;
+
+    for (const msg of allMessages) {
+      const ts: number = msg.sentAt ?? msg._creationTime;
+      if (latestMessageSentAt === null || ts > latestMessageSentAt) {
+        latestMessageSentAt = ts;
+      }
+      if (ts > readCutoff) {
+        unreadCount++;
+      }
+    }
+
+    return { latestMessageSentAt, unreadCount };
+  },
+});
+
 // ─── Send a message ────────────────────────────────────────────────────────
 
 /**
