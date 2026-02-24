@@ -2,39 +2,24 @@
 
 import { useRef, useEffect, useCallback, useState } from "react";
 import { ArrowLeft, Phone, Video, MoreVertical, ArrowDown } from "lucide-react";
-import MessageBubble, { Message } from "./MessageBubble";
+import MessageBubble from "./MessageBubble";
 import MessageInput from "./MessageInput";
 import TypingIndicator from "./TypingIndicator";
 import EmptyState from "./EmptyState";
 import StatusDot from "./StatusDot";
-import { Status } from "@/types/chat";
+import type { UIConversation, UIMessage, UITypingUser } from "@/types/ui";
 
 /** How many pixels from the bottom counts as "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 120;
 
-interface ConversationUser {
-  id: string;
-  name: string;
-  avatar: string;
-  status: Status;
-}
-
-interface ConversationData {
-  id: string;
-  user: ConversationUser;
-  lastMessage: string;
-  lastMessageTime: Date;
-  unreadCount: number;
-}
-
 interface ChatWindowProps {
-  conversation: ConversationData | null;
-  messages: Message[];
+  conversation: UIConversation | null;
+  messages: UIMessage[];
   onSendMessage: (text: string) => Promise<void>;
   onBack: () => void;
   showBack: boolean;
-  /** Names of users currently typing (from Convex real-time query) */
-  typingUsers?: { userId: string; name: string }[];
+  /** Users currently typing in this conversation. */
+  typingUsers?: UITypingUser[];
   onTyping?: () => void;
   onStopTyping?: () => void;
   /**

@@ -10,13 +10,14 @@ const DEBOUNCE_MS = 300;
 /**
  * Searches for users by name / displayName / email, excluding the caller.
  *
- * • An empty `query` returns ALL other users (useful for the initial list).
- * • The query string is debounced by DEBOUNCE_MS so Convex only creates a
- *   new reactive subscription after the user pauses typing — not on every
- *   single keystroke.
- * • Returns `undefined` while loading / between debounce ticks.
- * • Returns `[]` when there are genuinely no results.
- * • Each result includes `status` and `lastSeenAt` from the presence table.
+ * Behaviour:
+ *  - An empty `query` returns ALL other users (useful for the initial list).
+ *  - The query string is debounced so Convex only creates a new reactive
+ *    subscription after the user pauses typing — not on every keystroke.
+ *  - Each result includes `status` and `lastSeenAt` from the presence table.
+ *
+ * @param query – search string (empty string = all users)
+ * @returns `undefined` while loading / between debounce ticks | AppUser[] on ready
  */
 export function useUserSearch(query: string) {
   const [debouncedQuery, setDebouncedQuery] = useState(query);

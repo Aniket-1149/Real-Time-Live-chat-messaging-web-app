@@ -43,7 +43,7 @@ export interface AppMessage {
   replyToId?: Id<"messages"> | null;
 }
 
-/** DM conversation as returned by conversations.listConversations */
+/** DM/Group conversation as returned by conversations.listConversations */
 export interface AppConversation {
   _id: Id<"conversations">;
   _creationTime: number;
@@ -56,61 +56,9 @@ export interface AppConversation {
   lastReadAt?: number | null;
   lastReadMessageId?: Id<"messages"> | null;
   memberCount: number;
-  /** DM only */
+  /** DM only — the other participant enriched with presence */
   otherUser?: AppUser;
   /** Group only */
   name?: string;
   imageUrl?: string;
 }
-
-// ── Adapters ──────────────────────────────────────────────────────────────
-// Convert Convex data → the prop shapes the UI components expect.
-
-/** Converts AppConversation → the `Conversation` shape the sidebar expects */
-export function toUIConversation(conv: AppConversation) {
-  const isDM = conv.type === "dm" && conv.otherUser;
-
-  return {
-    id: conv._id as string,
-    type: conv.type,
-    user: isDM
-      ? {
-          id: conv.otherUser!._id as string,
-          name: conv.otherUser!.displayName ?? conv.otherUser!.name,
-          avatar: conv.otherUser!.imageUrl,
-          status: conv.otherUser!.status as Status,
-        }
-      : {
-          id: conv._id as string,
-          name: conv.name ?? "Group",
-          avatar:
-            conv.imageUrl ??
-            `https://api.dicebear.com/9.x/identicon/svg?seed=${conv._id}`,
-          status: "online" as Status,
-        },
-    lastMessage: conv.lastMessageText ?? "",
-    lastMessageTime: conv.lastMessageTime
-      ? new Date(conv.lastMessageTime)
-      : new Date(conv._creationTime),
-    unreadCount: conv.unreadCount,
-    memberCount: conv.memberCount,
-  };
-}
-
-/** Converts AppMessage → the `Message` shape the chat window expects */
-export function toUIMessage(msg: AppMessage, currentUserId: Id<"users">) {
-  return {
-    id: msg._id as string,
-    senderId: msg.senderId === currentUserId ? "me" : (msg.senderId as string),
-    senderName: msg.senderName,
-    senderImageUrl: msg.senderImageUrl,
-    text: msg.deleted ? "This message was deleted" : (msg.text ?? ""),
-    /** Use explicit sentAt — falls back to _creationTime for legacy rows */
-    timestamp: new Date(msg.sentAt ?? msg._creationTime),
-    deleted: msg.deleted,
-    edited: msg.edited,
-    editedAt: msg.editedAt ? new Date(msg.editedAt) : null,
-    replyToId: msg.replyToId ?? null,
-  };
-}
-

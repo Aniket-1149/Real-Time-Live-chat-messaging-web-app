@@ -15,7 +15,9 @@ import { useTypingUsers, useTypingReporter } from "@/hooks/useTyping";
 import { usePresence } from "@/hooks/usePresence";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useAuthUser } from "@/hooks/useAuthUser";
-import { toUIConversation, toUIMessage, AppConversation } from "@/types/chat";
+import { toUIConversation, toUIMessage } from "@/lib/adapters";
+import { AppConversation } from "@/types/chat";
+import type { UICurrentUser } from "@/types/ui";
 import { Id } from "@/convex/_generated/dataModel";
 
 export default function ChatPage() {
@@ -141,7 +143,7 @@ export default function ChatPage() {
       ? messages.map((m: any) => toUIMessage(m as any, authUser.id as Id<"users">))
       : [];
 
-  const currentUIUser = {
+  const currentUIUser: UICurrentUser = {
     id: authUser.id,
     name: authUser.name,
     avatar: authUser.avatar,
@@ -188,7 +190,7 @@ export default function ChatPage() {
         <NewConversationDialog
           onClose={() => setShowNewConvDialog(false)}
           onStartConversation={handleStartConversation}
-          conversations={conversations as any[]}
+          conversations={conversations as AppConversation[] | undefined}
         />
       )}
     </div>

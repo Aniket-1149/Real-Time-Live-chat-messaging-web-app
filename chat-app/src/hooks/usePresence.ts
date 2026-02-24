@@ -1,8 +1,9 @@
 "use client";
 
-import { useMutation } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { useEffect, useRef } from "react";
 import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 // Must match HEARTBEAT_INTERVAL_MS in convex/presence.ts
@@ -144,4 +145,48 @@ export function usePresence() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally empty — all values accessed via ref
+}
+
+// ── Presence query hooks ───────────────────────────────────────────────────
+// These are READ-only hooks. They are separate from usePresence() (which is
+// the management hook that writes heartbeats). Import these wherever you need
+// to DISPLAY presence for one or many users without triggering a write.
+
+/**
+ * Returns the current user's own presence record.
+ * Useful for displaying the authenticated user's status in the sidebar footer.
+ *
+ * @returns `undefined` while loading | the presence row when ready
+ */
+export function useMyPresence() {
+  return useQuery(api.presence.getMyPresence);
+}
+
+/**
+ * Returns the presence record for a single user by their Convex user ID.
+ * Used to show the other user's status in a DM header or user list.
+ *
+ * @param userId – pass `null` to skip (e.g. no user selected)
+ * @returns `undefined` while loading | the presence row | `null` if no record
+ */
+export function useUserPresence(userId: Id<"users"> | null) {
+  return useQuery(
+    api.presence.getPresence,
+    userId ? { userId } : "skip"
+  );
+}
+
+/**
+ * Returns presence records for multiple users at once.
+ * Used in group conversation headers or member lists to avoid N individual
+ * subscriptions.
+ *
+ * @param userIds – array of Convex user IDs to query (skips if empty)
+ * @returns `undefined` while loading | array of presence rows
+ */
+export function useBatchPresence(userIds: Id<"users">[]) {
+  return useQuery(
+    api.presence.batchGetPresence,
+    userIds.length > 0 ? { userIds } : "skip"
+  );
 }

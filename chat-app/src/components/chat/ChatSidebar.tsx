@@ -5,34 +5,12 @@ import { Search, Settings, UserPlus, LogOut, User } from "lucide-react";
 import ConversationItem from "./ConversationItem";
 import EmptyState from "./EmptyState";
 import StatusDot from "./StatusDot";
-import { Status } from "@/types/chat";
-
-interface ConversationUser {
-  id: string;
-  name: string;
-  avatar: string;
-  status: Status;
-}
-
-interface Conversation {
-  id: string;
-  user: ConversationUser;
-  lastMessage: string;
-  lastMessageTime: Date;
-  unreadCount: number;
-}
-
-interface CurrentUser {
-  id: string;
-  name: string;
-  avatar: string;
-  status: Status;
-}
+import type { UIConversation, UICurrentUser } from "@/types/ui";
 
 interface SidebarProps {
-  conversations: Conversation[];
+  conversations: UIConversation[];
   activeId: string | null;
-  currentUser: CurrentUser;
+  currentUser: UICurrentUser;
   onOpenConversation: (id: string) => void;
   onSearchUser: (query: string) => void;
   /** Called when user clicks the "New Conversation" button */

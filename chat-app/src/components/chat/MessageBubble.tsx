@@ -2,28 +2,14 @@
 
 import { Pencil } from "lucide-react";
 import { formatMessageTime, formatFullTimestamp } from "@/lib/formatTime";
+import type { UIMessage } from "@/types/ui";
 
-interface Reaction {
-  emoji: string;
-  count: number;
-}
-
-export interface Message {
-  id: string;
-  senderId: string;        // "me" | userId
-  senderName: string;
-  senderImageUrl: string;
-  text: string;
-  timestamp: Date;
-  deleted?: boolean;
-  edited?: boolean;
-  editedAt?: Date | null;
-  reactions?: Reaction[];
-  replyToId?: string | null;
-}
+// Re-export UIMessage under the name `Message` so any existing
+// import of `Message` from this file continues to work.
+export type { UIMessage as Message };
 
 interface MessageBubbleProps {
-  message: Message;
+  message: UIMessage;
   isOwn: boolean;
   /** Fallback avatar when senderImageUrl is empty */
   senderAvatar?: string;

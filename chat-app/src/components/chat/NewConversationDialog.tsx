@@ -5,7 +5,7 @@ import { X, Search, Loader2, MessageCircle, CheckCircle2 } from "lucide-react";
 import { useUserSearch } from "@/hooks/useUserSearch";
 import StatusDot from "./StatusDot";
 import { Id } from "@/convex/_generated/dataModel";
-import { Status } from "@/types/chat";
+import { Status, AppConversation } from "@/types/chat";
 
 interface NewConversationDialogProps {
   onClose: () => void;
@@ -18,8 +18,8 @@ interface NewConversationDialogProps {
     userId: Id<"users">,
     existingConvId: Id<"conversations"> | null
   ) => void;
-  /** Raw conversations list from useConversations() to detect existing DMs. */
-  conversations: any[] | undefined;
+  /** Live conversations list from useConversations() — used to detect existing DMs. */
+  conversations: AppConversation[] | undefined;
 }
 
 export default function NewConversationDialog({

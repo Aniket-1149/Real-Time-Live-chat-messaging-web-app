@@ -2,25 +2,10 @@
 
 import { formatConversationTime } from "@/lib/formatTime";
 import StatusDot from "./StatusDot";
-import { Status } from "@/types/chat";
-
-interface ConversationUser {
-  id: string;
-  name: string;
-  avatar: string;
-  status: Status;
-}
-
-interface Conversation {
-  id: string;
-  user: ConversationUser;
-  lastMessage: string;
-  lastMessageTime: Date;
-  unreadCount: number;
-}
+import type { UIConversation } from "@/types/ui";
 
 interface ConversationItemProps {
-  conversation: Conversation;
+  conversation: UIConversation;
   isActive: boolean;
   onOpenConversation: (id: string) => void;
 }
